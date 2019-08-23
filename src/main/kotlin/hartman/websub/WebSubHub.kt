@@ -18,6 +18,11 @@ class RootController {
 @RequestMapping("hub")
 class WebSubSubController {
 
+    @GetMapping
+    fun index(): String {
+        return "Subscribers POST here"
+    }
+
     @PostMapping(consumes = [MediaType.APPLICATION_FORM_URLENCODED_VALUE])
     fun subscribe(@RequestParam subscriptionRequest: Map<String, String>): ResponseEntity<Any> {
         print(subscriptionRequest)
