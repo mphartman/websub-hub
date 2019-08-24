@@ -92,7 +92,6 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                 .header(Headers.CONTENT_TYPE to contentType)
                 .header("Link", "<http://websubhub.us-east-1.elasticbeanstalk.com/hub>; rel=\"hub\"", "<${subscriber.topicUrl}>; rel=\"self\"")
                 .body(content)
-                .also { log.info(it.request.toString()) }
                 .response { _ -> }
     }
 }
