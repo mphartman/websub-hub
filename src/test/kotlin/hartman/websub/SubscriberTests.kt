@@ -1,10 +1,12 @@
 package hartman.websub
 
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager
+import javax.persistence.PersistenceException
 
 @DataJpaTest
 class SubscriberTests @Autowired constructor(
@@ -34,4 +36,12 @@ class SubscriberTests @Autowired constructor(
         assertThat(maybeSubscriber).isPresent.get().isEqualTo(sub2)
     }
 
+    @Test
+    fun `callbackUrl and topicUrl must be unique`() {
+        assertThatThrownBy {
+            val sub1 = testEntityManager.persist(Subscriber("http://sub1", "http://topic"));
+            val sub2 = testEntityManager.persist(Subscriber("http://sub1", "http://topic"));
+            testEntityManager.flush()
+        }.isInstanceOf(PersistenceException::class.java)
+    }
 }
