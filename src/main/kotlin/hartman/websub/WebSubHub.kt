@@ -11,6 +11,7 @@ import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.http.ResponseEntity.accepted
 import org.springframework.http.ResponseEntity.badRequest
+import org.springframework.http.ResponseEntity.notFound
 import org.springframework.http.ResponseEntity.ok
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -33,17 +34,35 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
     fun subscribe(@RequestParam body: Map<String, String>): ResponseEntity<Any> {
         log.info("Received Hub request $body")
         return when (val mode = body["hub.mode"]) {
-            "subscribe" -> {
+            "subscribe", "unsubscribe" -> {
                 val callback = body["hub.callback"]
                 val topic = body["hub.topic"]
                 return when {
                     callback == null -> badRequest().body("Missing required parameter value for hub.callback")
                     topic == null -> badRequest().body("Missing required parameter value for hub.topic")
                     else -> {
-                        val subscriber = findOrCreateSubscriber(callback, topic)
-                        verifySubscriberIntentAsync(subscriber)
-                        log.info("Accepting subscriber $subscriber")
-                        return accepted().build()
+                        return when (mode) {
+                            "subscribe" -> {
+                                val subscriber = findOrCreateSubscriber(callback, topic)
+                                verifySubscriberIntentAsync(subscriber, mode) {
+                                    // do nothing
+                                }
+                                log.info("Accepted $mode request from $subscriber")
+                                return accepted().build()
+                            }
+                            "unsubscribe" -> {
+                                val subscriber = subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic)
+                                return if (subscriber.isPresent) {
+                                    verifySubscriberIntentAsync(subscriber.get(), mode) {
+                                        subscriberRepository.delete(it)
+                                    }
+                                    accepted().build()
+                                } else {
+                                    notFound().build()
+                                }
+                            }
+                            else -> badRequest().build()
+                        }
                     }
                 }
             }
@@ -62,11 +81,11 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    fun verifySubscriberIntentAsync(subscriber: Subscriber) {
+    fun verifySubscriberIntentAsync(subscriber: Subscriber, mode: String, onSuccess: (Subscriber) -> Unit) {
         GlobalScope.launch {
             val challenge = generateNewChallenge()
-            log.info("Verifying $subscriber intent with GET using challenge = $challenge")
-            Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to "subscribe", "hub.topic" to subscriber.topicUrl, "hub.challenge" to challenge, "hub.lease_seconds" to "0"))
+            log.info("Verifying $subscriber intent of $mode with GET using challenge = $challenge")
+            Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to mode, "hub.topic" to subscriber.topicUrl, "hub.challenge" to challenge, "hub.lease_seconds" to "0"))
                     .response { result ->
                         log.info("Checking challenge from $subscriber verification response")
                         val (bytes, error) = result
@@ -74,6 +93,7 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                             val body = String(bytes)
                             if (challenge == body) {
                                 log.info("Challenge from $subscriber response matches! Subscriber verified.")
+                                onSuccess(subscriber)
                             } else {
                                 log.info("Challenge response [$body] from $subscriber does NOT match. Subscriber denied.")
                                 notifySubscriberDenied(subscriber, "challenge")

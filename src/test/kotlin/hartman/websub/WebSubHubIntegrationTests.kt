@@ -154,4 +154,51 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                     )
         }
     }
+
+    @Test
+    fun `Given a Subscriber when it POSTs a valid unsubscribe request then Hub should return a 202 Accepted`() {
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.callback", "http://localhost/subscribers/bar/callback")
+                        .param("hub.mode", "unsubscribe")
+                        .param("hub.topic", "http://localhost/topics/bar"))
+                .andExpect(status().isAccepted)
+    }
+
+    @Test
+    fun `Given a Subscriber when it POSTs a unsubscribe request for a non-existent subscription then Hub should return a 404`() {
+
+        MockServerClient("localhost", 1080)
+                .`when`(
+                        request()
+                                .withMethod("GET")
+                                .withPath("/bazChanged")
+                                .withQueryStringParameter("hub.challenge")
+                        , Times.once())
+                .respond { request ->
+                    HttpResponse()
+                            .withStatusCode(200)
+                            .withBody(request.getFirstQueryStringParameter("hub.challenge"))
+                }
+
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.callback", "http://localhost/bazChanged")
+                        .param("hub.mode", "subscribe")
+                        .param("hub.topic", "http://localhost/topics/bar"))
+                .andExpect(status().isAccepted)
+
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.callback", "http://localhost/bazChanged")
+                        .param("hub.mode", "unsubscribe")
+                        .param("hub.topic", "http://localhost/topics/bar"))
+                .andExpect(status().isAccepted)
+    }
 }
