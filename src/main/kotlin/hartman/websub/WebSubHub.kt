@@ -3,12 +3,20 @@ package hartman.websub
 import com.github.kittinunf.fuel.Fuel
 import com.github.kittinunf.fuel.core.Headers
 import com.github.kittinunf.result.Result
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
-import org.springframework.http.ResponseEntity.*
-import org.springframework.web.bind.annotation.*
+import org.springframework.http.ResponseEntity.accepted
+import org.springframework.http.ResponseEntity.badRequest
+import org.springframework.http.ResponseEntity.ok
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.RestController
 
 @RestController
 @RequestMapping("hub")
@@ -31,41 +39,56 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                 return when {
                     callback == null -> badRequest().body("Missing required parameter value for hub.callback")
                     topic == null -> badRequest().body("Missing required parameter value for hub.topic")
-                    else -> verifySubscriberIntent(callback, mode, topic)
+                    else -> {
+                        val subscriber = findOrCreateSubscriber(callback, topic)
+                        verifySubscriberIntentAsync(subscriber)
+                        log.info("Accepting subscriber $subscriber")
+                        return accepted().build()
+                    }
                 }
             }
             "publish" -> {
-                val topic = body["hub.topic"].orEmpty()
-                notifySubscribersOfTopicUpdate(topic)
+                val topic = body["hub.topic"]
+                if (topic != null) notifySubscribersOfTopicUpdate(topic)
                 ok().build()
             }
             else -> badRequest().body("Unsupported value for hub.mode: $mode")
         }
     }
 
-    fun verifySubscriberIntent(callback: String, mode: String, topic: String): ResponseEntity<Any> {
-        val subscriber = Subscriber(callback, topic)
-        val challenge = generateNewChallenge()
-        log.info("Verifying $subscriber intent with GET using challenge = $challenge")
-        Fuel.get(callback, listOf("hub.mode" to mode, "hub.topic" to topic, "hub.challenge" to challenge, "hub.lease_seconds" to "0"))
-                .response { result ->
-                    log.info("Checking challenge from $subscriber verification response")
-                    val (bytes, error) = result
-                    if (bytes != null) {
-                        val body = String(bytes)
-                        if (challenge == body) {
-                            log.info("Challenge from $subscriber response matches! Subscriber verified.")
-                            val newSubscriber = subscriberRepository.save(subscriber)
-                            log.info("Saved $newSubscriber")
-                        } else {
-                            log.info("Challenge response [$body] from $subscriber does NOT match. Subscriber denied.")
+    fun findOrCreateSubscriber(callback: String, topic: String): Subscriber {
+        return subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic).orElseGet {
+            subscriberRepository.save(Subscriber(callback, topic))
+        }
+    }
+
+    fun verifySubscriberIntentAsync(subscriber: Subscriber) {
+        GlobalScope.launch {
+            val challenge = generateNewChallenge()
+            log.info("Verifying $subscriber intent with GET using challenge = $challenge")
+            Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to "subscribe", "hub.topic" to subscriber.topicUrl, "hub.challenge" to challenge, "hub.lease_seconds" to "0"))
+                    .response { result ->
+                        log.info("Checking challenge from $subscriber verification response")
+                        val (bytes, error) = result
+                        if (bytes != null) {
+                            val body = String(bytes)
+                            if (challenge == body) {
+                                log.info("Challenge from $subscriber response matches! Subscriber verified.")
+                            } else {
+                                log.info("Challenge response [$body] from $subscriber does NOT match. Subscriber denied.")
+                                notifySubscriberDenied(subscriber, "challenge")
+                            }
                         }
                     }
-                }
-        return accepted().build()
+        }
     }
 
     fun generateNewChallenge() = java.util.UUID.randomUUID().toString()
+
+    fun notifySubscriberDenied(subscriber: Subscriber, reason: String) {
+        Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to "denied", "hub.topic" to subscriber.topicUrl, "hub.reason" to reason))
+                .response()
+    }
 
     fun notifySubscribersOfTopicUpdate(topicUrl: String) {
         log.info("GET resource from $topicUrl")

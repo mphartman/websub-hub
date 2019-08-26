@@ -2,6 +2,7 @@ package hartman.websub
 
 import org.springframework.data.repository.CrudRepository
 import org.springframework.stereotype.Repository
+import java.util.*
 import javax.persistence.Entity
 import javax.persistence.GeneratedValue
 import javax.persistence.Id
@@ -17,4 +18,5 @@ class Subscriber(
 @Repository
 interface SubscriberRepository: CrudRepository<Subscriber, Long> {
     fun findAllByTopicUrl(topicUrl: String): Iterable<Subscriber>
+    fun findByCallbackUrlAndTopicUrl(callbackUrl: String, topicUrl: String): Optional<Subscriber>
 }
