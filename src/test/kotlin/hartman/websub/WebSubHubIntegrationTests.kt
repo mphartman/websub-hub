@@ -99,9 +99,19 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                                 .withQueryStringParameter("hub.challenge")
                         , Times.once())
                 .respond { request ->
-                    HttpResponse()
+                    val response = HttpResponse()
                             .withStatusCode(200)
                             .withBody(request.getFirstQueryStringParameter("hub.challenge"))
+
+                    mockMvc.perform(
+                            post("/hub")
+                                    .characterEncoding("utf-8")
+                                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                                    .param("hub.mode", "publish")
+                                    .param("hub.topic", "http://localhost:1080/topics/bar"))
+                            .andExpect(status().isOk)
+
+                    response
                 }
 
         MockServerClient("localhost", 1080)
@@ -115,14 +125,6 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                                 .withHeader("Content-Type", "text/plain; charset=UTF-8")
                 )
 
-        MockServerClient("localhost", 1080)
-                .`when`(
-                        request()
-                                .withMethod("POST")
-                                .withPath("/barChanged")
-                        , Times.once())
-                .respond(response())
-
         mockMvc.perform(
                 post("/hub")
                         .characterEncoding("utf-8")
@@ -131,20 +133,13 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                         .param("hub.mode", "subscribe")
                         .param("hub.topic", "http://localhost:1080/topics/bar"))
 
-        mockMvc.perform(
-                post("/hub")
-                        .characterEncoding("utf-8")
-                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                        .param("hub.mode", "publish")
-                        .param("hub.topic", "http://localhost:1080/topics/bar"))
-                .andExpect(status().isOk)
-
         await.atMost(2, SECONDS) untilAsserted {
             MockServerClient("localhost", 1080)
                     .verify(
                             request()
                                     .withMethod("GET")
-                                    .withPath("/barChanged"),
+                                    .withPath("/barChanged")
+                                    .withQueryStringParameter("hub.challenge"),
                             request()
                                     .withMethod("GET")
                                     .withPath("/topics/bar"),
