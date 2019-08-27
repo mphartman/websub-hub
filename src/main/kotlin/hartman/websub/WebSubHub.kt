@@ -31,7 +31,7 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
     }
 
     @PostMapping(consumes = [MediaType.APPLICATION_FORM_URLENCODED_VALUE])
-    fun subscribe(@RequestParam body: Map<String, String>): ResponseEntity<Any> {
+    fun handleHubRequest(@RequestParam body: Map<String, String>): ResponseEntity<Any> {
         log.info("Received Hub request $body")
         return when (val mode = body["hub.mode"]) {
             "subscribe", "unsubscribe" -> {
@@ -48,16 +48,19 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                                     // do nothing
                                 }
                                 log.info("Accepted $mode request from $subscriber")
-                                return accepted().build()
+                                accepted().build()
                             }
                             "unsubscribe" -> {
                                 val subscriber = subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic)
                                 return if (subscriber.isPresent) {
                                     verifySubscriberIntentAsync(subscriber.get(), mode) {
                                         subscriberRepository.delete(it)
+                                        log.info("Deleted $it")
                                     }
+                                    log.info("Accepted $mode request from $subscriber")
                                     accepted().build()
                                 } else {
+                                    log.info("Not Found for $mode request from $subscriber")
                                     notFound().build()
                                 }
                             }
@@ -75,13 +78,13 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    fun findOrCreateSubscriber(callback: String, topic: String): Subscriber {
+    private fun findOrCreateSubscriber(callback: String, topic: String): Subscriber {
         return subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic).orElseGet {
             subscriberRepository.save(Subscriber(callback, topic))
         }
     }
 
-    fun verifySubscriberIntentAsync(subscriber: Subscriber, mode: String, onSuccess: (Subscriber) -> Unit) {
+    private fun verifySubscriberIntentAsync(subscriber: Subscriber, mode: String, onSuccess: (Subscriber) -> Unit) {
         GlobalScope.launch {
             val challenge = generateNewChallenge()
             log.info("Verifying $subscriber intent of $mode with GET using challenge = $challenge")
@@ -103,14 +106,14 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    fun generateNewChallenge() = java.util.UUID.randomUUID().toString()
+    private fun generateNewChallenge() = java.util.UUID.randomUUID().toString()
 
-    fun notifySubscriberDenied(subscriber: Subscriber, reason: String) {
+    private fun notifySubscriberDenied(subscriber: Subscriber, reason: String) {
         Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to "denied", "hub.topic" to subscriber.topicUrl, "hub.reason" to reason))
                 .response()
     }
 
-    fun notifySubscribersOfTopicUpdate(topicUrl: String) {
+    private fun notifySubscribersOfTopicUpdate(topicUrl: String) {
         log.info("GET resource from $topicUrl")
         Fuel.get(topicUrl).response { _, response, result ->
             when (result) {
@@ -129,7 +132,7 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    fun notifySubscriber(subscriber: Subscriber, contentType: String, content: ByteArray) {
+    private fun notifySubscriber(subscriber: Subscriber, contentType: String, content: ByteArray) {
         log.info("POST to $subscriber with $contentType")
         Fuel.post(subscriber.callbackUrl)
                 .header(Headers.CONTENT_TYPE to contentType)
