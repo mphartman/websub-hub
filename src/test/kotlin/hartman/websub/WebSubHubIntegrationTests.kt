@@ -146,6 +146,8 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                             request()
                                     .withMethod("POST")
                                     .withPath("/barChanged")
+                                    .withHeader("Content-Type", "text/plain; charset=UTF-8")
+                                    .withBody("Come with me if you want to live!")
                     )
         }
     }
@@ -194,5 +196,66 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                         .param("hub.mode", "unsubscribe")
                         .param("hub.topic", "http://localhost/topics/bar"))
                 .andExpect(status().isAccepted)
+    }
+
+    @Test
+    fun `Given a Subscription made with a hub secret when new content is distributed then Hub must send X-Hub-Signature header`() {
+        MockServerClient("localhost", 1080)
+                .`when`(
+                        request()
+                                .withMethod("GET")
+                                .withPath("/quxChanged")
+                                .withQueryStringParameter("hub.secret")
+                        , Times.once())
+                .respond { request ->
+                    val response = HttpResponse()
+                            .withStatusCode(200)
+                            .withBody(request.getFirstQueryStringParameter("hub.challenge"))
+
+                    mockMvc.perform(
+                            post("/hub")
+                                    .characterEncoding("utf-8")
+                                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                                    .param("hub.mode", "publish")
+                                    .param("hub.topic", "http://localhost:1080/topics/qux"))
+                            .andExpect(status().isOk)
+
+                    response
+                }
+
+        MockServerClient("localhost", 1080)
+                .`when`(
+                        request()
+                                .withMethod("GET")
+                                .withPath("/topics/qux")
+                )
+                .respond(
+                        response("Keep it secret, keep it safe!")
+                                .withHeader("Content-Type", "text/plain; charset=UTF-8")
+                )
+
+        // send Subscription Request
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.callback", "http://localhost:1080/quxChanged")
+                        .param("hub.mode", "subscribe")
+                        .param("hub.topic", "http://localhost:1080/topics/qux")
+                        .param("hub.secret", "OneRingToRuleThemAll"))
+
+        val signature = "6ff5af4186ca7efceb3d658747c4c32edfef7f95910db45f689e650983a3c0e0"
+        val expectedSignatureHeaderValue = "sha256=$signature"
+
+        await.atMost(2, SECONDS) untilAsserted {
+            MockServerClient("localhost", 1080)
+                    .verify(
+                            request()
+                                    .withMethod("POST")
+                                    .withPath("/quxChanged")
+                                    .withHeader("X-Hub-Signature", expectedSignatureHeaderValue)
+                                    .withHeader("Content-Type", "text/plain; charset=UTF-8")
+                    )
+        }
     }
 }

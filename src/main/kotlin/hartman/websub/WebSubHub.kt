@@ -18,10 +18,13 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 @RestController
 @RequestMapping("hub")
 class WebSubSubController(@Autowired val subscriberRepository: SubscriberRepository) {
+    private val HUB_URL = "http://websubhub.us-east-1.elasticbeanstalk.com/hub"
 
     private val log = LoggerFactory.getLogger(WebSubSubController::class.java)
 
@@ -43,7 +46,8 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                     else -> {
                         return when (mode) {
                             "subscribe" -> {
-                                val subscriber = findOrCreateSubscriber(callback, topic)
+                                val secret = body["hub.secret"]
+                                val subscriber = findOrCreateSubscriber(callback, topic, secret)
                                 verifySubscriberIntentAsync(subscriber, mode) {
                                     // do nothing
                                 }
@@ -78,9 +82,9 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    private fun findOrCreateSubscriber(callback: String, topic: String): Subscriber {
+    private fun findOrCreateSubscriber(callback: String, topic: String, secret: String?): Subscriber {
         return subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic).orElseGet {
-            subscriberRepository.save(Subscriber(callback, topic))
+            subscriberRepository.save(Subscriber(callback, topic, secret))
         }
     }
 
@@ -134,10 +138,29 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
 
     private fun notifySubscriber(subscriber: Subscriber, contentType: String, content: ByteArray) {
         log.info("POST to $subscriber with $contentType")
-        Fuel.post(subscriber.callbackUrl)
+        val req = Fuel.post(subscriber.callbackUrl)
                 .header(Headers.CONTENT_TYPE to contentType)
-                .header("Link", "<http://websubhub.us-east-1.elasticbeanstalk.com/hub>; rel=\"hub\"", "<${subscriber.topicUrl}>; rel=\"self\"")
+                .header("Link", "<$HUB_URL>; rel=\"hub\"", "<${subscriber.topicUrl}>; rel=\"self\"")
                 .body(content)
-                .response { _ -> }
+
+        if (subscriber.secret != null) {
+            val key = subscriber.secret!!.toByteArray(charset("UTF8"))
+            req.appendHeader("X-Hub-Signature", "sha256=${hex(hmacSHA256(key, content))}")
+        }
+
+        req.response { _ -> }
     }
+
+    private fun hmacSHA256(key: ByteArray, data: ByteArray): ByteArray {
+        val algorithm = "HmacSHA256"
+        return Mac.getInstance(algorithm).run {
+            init(SecretKeySpec(key, algorithm))
+            doFinal(data)
+        }
+    }
+
+    private fun hex(data: ByteArray): String = data.fold(StringBuilder()) { acc, next ->
+        acc.append(String.format("%02x", next))
+    }.toString().toLowerCase()
+
 }
