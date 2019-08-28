@@ -4,6 +4,7 @@ import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockserver.client.MockServerClient
 import org.mockserver.integration.ClientAndServer
@@ -23,6 +24,10 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.util.concurrent.TimeUnit.SECONDS
+import org.apache.coyote.http11.Constants.a
+import io.netty.handler.codec.http.HttpMethod.POST
+import org.apache.commons.lang3.ObjectUtils.mode
+import org.junit.jupiter.api.AfterEach
 
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -40,6 +45,11 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
     @AfterAll
     fun stopServer() {
         mockServer.stop()
+    }
+
+    @BeforeEach
+    fun resetServer() {
+        MockServerClient("localhost", 1080).reset()
     }
 
     @Test
@@ -99,19 +109,9 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                                 .withQueryStringParameter("hub.challenge")
                         , Times.once())
                 .respond { request ->
-                    val response = HttpResponse()
+                    HttpResponse()
                             .withStatusCode(200)
                             .withBody(request.getFirstQueryStringParameter("hub.challenge"))
-
-                    mockMvc.perform(
-                            post("/hub")
-                                    .characterEncoding("utf-8")
-                                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                                    .param("hub.mode", "publish")
-                                    .param("hub.topic", "http://localhost:1080/topics/bar"))
-                            .andExpect(status().isOk)
-
-                    response
                 }
 
         MockServerClient("localhost", 1080)
@@ -132,6 +132,16 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                         .param("hub.callback", "http://localhost:1080/barChanged")
                         .param("hub.mode", "subscribe")
                         .param("hub.topic", "http://localhost:1080/topics/bar"))
+
+        Thread.sleep(1_000) // :(
+
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.mode", "publish")
+                        .param("hub.topic", "http://localhost:1080/topics/bar"))
+                .andExpect(status().isOk)
 
         await.atMost(2, SECONDS) untilAsserted {
             MockServerClient("localhost", 1080)
@@ -208,19 +218,9 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                                 .withQueryStringParameter("hub.secret")
                         , Times.once())
                 .respond { request ->
-                    val response = HttpResponse()
+                    HttpResponse()
                             .withStatusCode(200)
                             .withBody(request.getFirstQueryStringParameter("hub.challenge"))
-
-                    mockMvc.perform(
-                            post("/hub")
-                                    .characterEncoding("utf-8")
-                                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                                    .param("hub.mode", "publish")
-                                    .param("hub.topic", "http://localhost:1080/topics/qux"))
-                            .andExpect(status().isOk)
-
-                    response
                 }
 
         MockServerClient("localhost", 1080)
@@ -234,7 +234,6 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                                 .withHeader("Content-Type", "text/plain; charset=UTF-8")
                 )
 
-        // send Subscription Request
         mockMvc.perform(
                 post("/hub")
                         .characterEncoding("utf-8")
@@ -243,6 +242,16 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                         .param("hub.mode", "subscribe")
                         .param("hub.topic", "http://localhost:1080/topics/qux")
                         .param("hub.secret", "OneRingToRuleThemAll"))
+
+        Thread.sleep(1_000)
+
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.mode", "publish")
+                        .param("hub.topic", "http://localhost:1080/topics/qux"))
+                .andExpect(status().isOk)
 
         val signature = "6ff5af4186ca7efceb3d658747c4c32edfef7f95910db45f689e650983a3c0e0"
         val expectedSignatureHeaderValue = "sha256=$signature"

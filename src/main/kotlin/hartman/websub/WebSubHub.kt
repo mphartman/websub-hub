@@ -11,7 +11,6 @@ import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.http.ResponseEntity.accepted
 import org.springframework.http.ResponseEntity.badRequest
-import org.springframework.http.ResponseEntity.notFound
 import org.springframework.http.ResponseEntity.ok
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -21,10 +20,11 @@ import org.springframework.web.bind.annotation.RestController
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+private const val HUB_URL = "http://websubhub.us-east-1.elasticbeanstalk.com/hub"
+
 @RestController
 @RequestMapping("hub")
 class WebSubSubController(@Autowired val subscriberRepository: SubscriberRepository) {
-    private val HUB_URL = "http://websubhub.us-east-1.elasticbeanstalk.com/hub"
 
     private val log = LoggerFactory.getLogger(WebSubSubController::class.java)
 
@@ -44,32 +44,21 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                     callback == null -> badRequest().body("Missing required parameter value for hub.callback")
                     topic == null -> badRequest().body("Missing required parameter value for hub.topic")
                     else -> {
-                        return when (mode) {
+                        val subscriber = SubscriberKey(callback, topic)
+                        when (mode) {
                             "subscribe" -> {
-                                val secret = body["hub.secret"]
-                                val subscriber = findOrCreateSubscriber(callback, topic, secret)
-                                verifySubscriberIntentAsync(subscriber, mode) {
-                                    // do nothing
+                                verifySubscriberIntent(subscriber, mode) {
+                                    createOrUpdateSubscriber(it.callbackUrl, it.topicUrl, body["hub.secret"])
                                 }
-                                log.info("Accepted $mode request from $subscriber")
-                                accepted().build()
                             }
                             "unsubscribe" -> {
-                                val subscriber = subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic)
-                                return if (subscriber.isPresent) {
-                                    verifySubscriberIntentAsync(subscriber.get(), mode) {
-                                        subscriberRepository.delete(it)
-                                        log.info("Deleted $it")
-                                    }
-                                    log.info("Accepted $mode request from $subscriber")
-                                    accepted().build()
-                                } else {
-                                    log.info("Not Found for $mode request from $subscriber")
-                                    notFound().build()
+                                verifySubscriberIntent(subscriber, mode) {
+                                    deleteSubscriber(it.callbackUrl, it.topicUrl)
                                 }
                             }
-                            else -> badRequest().build()
                         }
+                        log.info("Accepted $mode request from $subscriber")
+                        accepted().build()
                     }
                 }
             }
@@ -82,24 +71,30 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    private fun findOrCreateSubscriber(callback: String, topic: String, secret: String?): Subscriber {
-        return subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic).orElseGet {
-            subscriberRepository.save(Subscriber(callback, topic, secret))
-        }
+    private fun createOrUpdateSubscriber(callback: String, topic: String, secret: String?): Subscriber {
+        val subscriber = subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic)
+                .orElse(Subscriber(callback, topic, secret))
+        subscriber.secret = secret
+        return subscriberRepository.save(subscriber)
     }
 
-    private fun verifySubscriberIntentAsync(subscriber: Subscriber, mode: String, onSuccess: (Subscriber) -> Unit) {
-        GlobalScope.launch {
-            val challenge = generateNewChallenge()
-            log.info("Verifying $subscriber intent of $mode with GET using challenge = $challenge")
-            Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to mode, "hub.topic" to subscriber.topicUrl, "hub.challenge" to challenge, "hub.lease_seconds" to "0"))
-                    .response { result ->
+    private fun deleteSubscriber(callback: String, topic: String) {
+        subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic).ifPresent { subscriberRepository.delete(it) }
+    }
+
+    private fun verifySubscriberIntent(subscriber: SubscriberKey, mode: String, onSuccess: (SubscriberKey) -> Unit) {
+        val challenge = generateNewChallenge()
+        log.info("Verifying $subscriber intent of $mode with GET using challenge = $challenge")
+        Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to mode, "hub.topic" to subscriber.topicUrl, "hub.challenge" to challenge, "hub.lease_seconds" to "0"))
+                .response { _, response, result ->
+                    log.info("${response.statusCode} status code from Subscriber confirmation response")
+                    if (response.statusCode == 200) {
                         log.info("Checking challenge from $subscriber verification response")
                         val (bytes, error) = result
                         if (bytes != null) {
                             val body = String(bytes)
                             if (challenge == body) {
-                                log.info("Challenge from $subscriber response matches! Subscriber verified.")
+                                log.info("Challenge from $subscriber response matches! Subscriber verified. Action will be carried out.")
                                 onSuccess(subscriber)
                             } else {
                                 log.info("Challenge response [$body] from $subscriber does NOT match. Subscriber denied.")
@@ -107,12 +102,12 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                             }
                         }
                     }
-        }
+                }
     }
 
     private fun generateNewChallenge() = java.util.UUID.randomUUID().toString()
 
-    private fun notifySubscriberDenied(subscriber: Subscriber, reason: String) {
+    private fun notifySubscriberDenied(subscriber: SubscriberKey, reason: String) {
         Fuel.get(subscriber.callbackUrl, listOf("hub.mode" to "denied", "hub.topic" to subscriber.topicUrl, "hub.reason" to reason))
                 .response()
     }
@@ -140,7 +135,7 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         log.info("POST to $subscriber with $contentType")
         val req = Fuel.post(subscriber.callbackUrl)
                 .header(Headers.CONTENT_TYPE to contentType)
-                .header("Link", "<$HUB_URL>; rel=\"hub\"", "<${subscriber.topicUrl}>; rel=\"self\"")
+                .header("Link", "<${HUB_URL}>; rel=\"hub\"", "<${subscriber.topicUrl}>; rel=\"self\"")
                 .body(content)
 
         if (subscriber.secret != null) {
@@ -164,3 +159,5 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
     }.toString().toLowerCase()
 
 }
+
+data class SubscriberKey(val callbackUrl: String, val topicUrl: String)
