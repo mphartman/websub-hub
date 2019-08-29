@@ -14,7 +14,8 @@ import javax.persistence.UniqueConstraint
 class Subscriber(
         var callbackUrl: String,
         var topicUrl: String,
-        var secret: String? = null
+        var secret: String? = null,
+        var expires: Long = 0
 ) : AbstractEntity<Long>() {
     override fun toString() = "${super.toString()}, callbackUrl: $callbackUrl, topicUrl: $topicUrl"
 }

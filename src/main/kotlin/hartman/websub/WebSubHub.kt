@@ -3,8 +3,6 @@ package hartman.websub
 import com.github.kittinunf.fuel.Fuel
 import com.github.kittinunf.fuel.core.Headers
 import com.github.kittinunf.result.Result
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
@@ -21,6 +19,8 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 private const val HUB_URL = "http://websubhub.us-east-1.elasticbeanstalk.com/hub"
+
+data class SubscriberKey(val callbackUrl: String, val topicUrl: String)
 
 @RestController
 @RequestMapping("hub")
@@ -48,7 +48,7 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                         when (mode) {
                             "subscribe" -> {
                                 verifySubscriberIntent(subscriber, mode) {
-                                    createOrUpdateSubscriber(it.callbackUrl, it.topicUrl, body["hub.secret"])
+                                    createOrUpdateSubscriber(it.callbackUrl, it.topicUrl, body["hub.secret"], body["hub.lease_seconds"])
                                 }
                             }
                             "unsubscribe" -> {
@@ -71,10 +71,13 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
         }
     }
 
-    private fun createOrUpdateSubscriber(callback: String, topic: String, secret: String?): Subscriber {
+    private fun createOrUpdateSubscriber(callback: String, topic: String, secret: String?, leaseSecondsParam: String?): Subscriber {
+        val leaseSeconds = leaseSecondsParam?.toLong() ?: 0
         val subscriber = subscriberRepository.findByCallbackUrlAndTopicUrl(callback, topic)
-                .orElse(Subscriber(callback, topic, secret))
+                .orElse(Subscriber(callback, topic, secret, leaseSeconds))
         subscriber.secret = secret
+        subscriber.expires = if (leaseSeconds <= 0) 0 else System.currentTimeMillis() + (leaseSeconds * 1_000)
+        println("${System.currentTimeMillis()}, $leaseSeconds, ${subscriber.expires}")
         return subscriberRepository.save(subscriber)
     }
 
@@ -125,7 +128,9 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                     if (headerValues.isNotEmpty()) {
                         contentType = headerValues.first()
                     }
-                    subscriberRepository.findAllByTopicUrl(topicUrl).forEach { notifySubscriber(it, contentType, result.get()) }
+                    subscriberRepository.findAllByTopicUrl(topicUrl)
+                            .filter { it.expires == 0L || it.expires > System.currentTimeMillis() }
+                            .forEach { notifySubscriber(it, contentType, result.get()) }
                 }
             }
         }
@@ -159,5 +164,3 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
     }.toString().toLowerCase()
 
 }
-
-data class SubscriberKey(val callbackUrl: String, val topicUrl: String)

@@ -267,4 +267,60 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                     )
         }
     }
+
+    @Test
+    fun `Given a Subscription when subscription lease expires then Hub must not send content distribution`() {
+
+        MockServerClient("localhost", 1080)
+                .`when`(
+                        request()
+                                .withMethod("GET")
+                                .withPath("/barChanged")
+                                .withQueryStringParameter("hub.challenge")
+                        , Times.once())
+                .respond { request ->
+                    HttpResponse()
+                            .withStatusCode(200)
+                            .withBody(request.getFirstQueryStringParameter("hub.challenge"))
+                }
+
+        MockServerClient("localhost", 1080)
+                .`when`(
+                        request()
+                                .withMethod("GET")
+                                .withPath("/topics/bar")
+                )
+                .respond(
+                        response("Come with me if you want to live!")
+                                .withHeader("Content-Type", "text/plain; charset=UTF-8")
+                )
+
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.callback", "http://localhost:1080/barChanged")
+                        .param("hub.mode", "subscribe")
+                        .param("hub.topic", "http://localhost:1080/topics/bar")
+                        .param("hub.lease_seconds", "2"))
+
+        Thread.sleep(3_000)
+
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.mode", "publish")
+                        .param("hub.topic", "http://localhost:1080/topics/bar"))
+
+        await.atMost(2, SECONDS) untilAsserted {
+            MockServerClient("localhost", 1080)
+                    .verify(
+                            request()
+                                    .withMethod("POST")
+                                    .withPath("/barChanged"),
+                            exactly(0)
+                    )
+        }
+    }
 }
