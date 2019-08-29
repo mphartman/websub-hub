@@ -77,7 +77,6 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                 .orElse(Subscriber(callback, topic, secret, leaseSeconds))
         subscriber.secret = secret
         subscriber.expires = if (leaseSeconds <= 0) 0 else System.currentTimeMillis() + (leaseSeconds * 1_000)
-        println("${System.currentTimeMillis()}, $leaseSeconds, ${subscriber.expires}")
         return subscriberRepository.save(subscriber)
     }
 
