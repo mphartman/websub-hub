@@ -64,7 +64,8 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
             }
             "publish" -> {
                 val topic = body["hub.topic"]
-                if (topic != null) notifySubscribersOfTopicUpdate(topic)
+                val url = body["hub.url"]
+                if (topic != null) notifySubscribersOfTopicUpdate(topic, url)
                 ok().build()
             }
             else -> badRequest().body("Unsupported value for hub.mode: $mode")
@@ -114,12 +115,13 @@ class WebSubSubController(@Autowired val subscriberRepository: SubscriberReposit
                 .response()
     }
 
-    private fun notifySubscribersOfTopicUpdate(topicUrl: String) {
-        log.info("GET resource from $topicUrl")
-        Fuel.get(topicUrl).response { _, response, result ->
+    private fun notifySubscribersOfTopicUpdate(topicUrl: String, resourceUrl: String?) {
+        val topicResourceUrl = resourceUrl ?: topicUrl
+        log.info("GET resource from $topicResourceUrl")
+        Fuel.get(topicResourceUrl).response { _, response, result ->
             when (result) {
                 is Result.Failure -> {
-                    log.info("Failed to GET resource at $topicUrl. Subscribers will not be notified")
+                    log.info("Failed to GET resource at $topicResourceUrl. Subscribers will not be notified")
                 }
                 is Result.Success -> {
                     var contentType = "text/plain; charset=UTF-8"

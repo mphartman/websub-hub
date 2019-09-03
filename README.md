@@ -15,8 +15,8 @@ A WebSub hub implementation written in Kotlin
 A publisher wishing to inform this hub of updates send a POST request to the hub URL with
 `application/x-www-form-urlencoded` encoded parameters of:
 * `hub.mode` set with value of "publish" 
-* `hub.topic` set with the URL of the resource that should be sent to subscribers.
-
+* `hub.topic` set with the URL identifying the topic
+* `hub.url` (optional) URL of the resource containing the content which should be sent to subscribers, if missing, defaults to value of `hub.topic`
 ## References
 
 * WebSub - W3C Recommendation 23 January 2018 - https://www.w3.org/TR/websub/

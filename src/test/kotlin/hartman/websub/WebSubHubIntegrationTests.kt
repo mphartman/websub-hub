@@ -24,10 +24,6 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.util.concurrent.TimeUnit.SECONDS
-import org.apache.coyote.http11.Constants.a
-import io.netty.handler.codec.http.HttpMethod.POST
-import org.apache.commons.lang3.ObjectUtils.mode
-import org.junit.jupiter.api.AfterEach
 
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -320,6 +316,27 @@ class WebSubHubIntegrationTests(@Autowired val mockMvc: MockMvc) {
                                     .withMethod("POST")
                                     .withPath("/barChanged"),
                             exactly(0)
+                    )
+        }
+    }
+
+    @Test
+    fun `Given a Publisher when a POST request for a topic update that has a URL then Hub should do a GET request for that URL`() {
+        mockMvc.perform(
+                post("/hub")
+                        .characterEncoding("utf-8")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("hub.mode", "publish")
+                        .param("hub.topic", "http://localhost:1080/topics/bar")
+                        .param("hub.url", "http://localhost:1080/topic-resource.json"))
+                .andExpect(status().isOk)
+
+        await.atMost(2, SECONDS) untilAsserted {
+            MockServerClient("localhost", 1080)
+                    .verify(
+                            request()
+                                    .withMethod("GET")
+                                    .withPath("/topic-resource.json")
                     )
         }
     }
